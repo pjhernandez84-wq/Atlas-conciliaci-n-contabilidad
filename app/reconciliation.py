@@ -2,6 +2,7 @@
 import csv
 import io
 import re
+import unicodedata
 from collections import Counter
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
@@ -48,17 +49,38 @@ def parse_csv(text, source):
 
 def preview(bank_text, ledger_text, balances):
     bank, ledger = parse_csv(bank_text, 'banco'), parse_csv(ledger_text, 'mayor')
-    # Candidate lookup includes date, concept, signed amount. No record is consumed.
-    def key(row):
-        return row['fecha'], row['concepto'].strip().casefold(), Decimal(row['importe'])
+    # Same-month signed-amount candidates are suggestions, never approvals.
+    # Keep every edge, including weak evidence and competing claims in both directions.
+    stopwords = set('transferencia ingreso pago recibo factura fra favor concepto entrega documentos para su compensacion banco dia de del la el en por a y sl sa slu asiento apunte'.split())
+    def tokens(text):
+        text = re.sub(r'\[Asiento/apunte:.*?\]', '', text, flags=re.I)
+        text = ''.join(c for c in unicodedata.normalize('NFKD', text.casefold()) if not unicodedata.combining(c))
+        return {t for t in re.findall(r'[a-z0-9]+', text) if len(t) >= 4 and t not in stopwords}
     for source, other in [(bank, ledger), (ledger, bank)]:
         index = {}
         for row in other:
-            index.setdefault(key(row), []).append(row['id'])
+            index.setdefault((row['fecha'][:7], Decimal(row['importe'])), []).append(row)
         for row in source:
-            row['candidatos'] = index.get(key(row), [])
-            row['estado'] = ('coincidencia propuesta' if len(row['candidatos']) == 1 and not row['posible_duplicado']
-                             else 'ambigua' if row['candidatos'] else 'sin pareja')
+            details = []
+            for candidate in index.get((row['fecha'][:7], Decimal(row['importe'])), []):
+                shared = sorted(tokens(row['concepto']) & tokens(candidate['concepto']))
+                same_date = row['fecha'] == candidate['fecha']
+                exact = row['concepto'].strip().casefold() == candidate['concepto'].strip().casefold()
+                evidence = 'concepto exacto' if exact else ('términos comunes: ' + ', '.join(shared) if shared else 'sin evidencia de concepto; solo importe y signo')
+                details.append({'id': candidate['id'], 'fecha': candidate['fecha'],
+                                'concepto': candidate['concepto'], 'importe': candidate['importe'],
+                                'motivo': ('misma fecha; ' if same_date else 'fecha distinta; ') + evidence,
+                                'evidencia_concepto': bool(exact or shared)})
+            row['detalle_candidatos'] = details
+            row['candidatos'] = [d['id'] for d in details]
+    by_id = {r['id']: r for r in bank + ledger}
+    for row in bank + ledger:
+        ids = row['candidatos']
+        conflict = (row['posible_duplicado'] or len(ids) > 1 or
+                    any(by_id[i]['posible_duplicado'] or len(by_id[i]['candidatos']) > 1 for i in ids))
+        row['estado'] = ('ambigua' if ids and conflict else
+                         'propuesta pendiente de revisión' if ids and row['detalle_candidatos'][0]['evidencia_concepto'] else
+                         'solo importe: revisar concepto' if ids else 'sin candidato individual')
     controls = {}
     for name, rows in [('banco', bank), ('mayor', ledger)]:
         opening, closing = amount(balances[name + '_inicial']), amount(balances[name + '_final'])
