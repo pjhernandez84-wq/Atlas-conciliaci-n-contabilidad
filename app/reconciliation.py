@@ -81,6 +81,38 @@ def preview(bank_text, ledger_text, balances):
         row['estado'] = ('ambigua' if ids and conflict else
                          'propuesta pendiente de revisión' if ids and row['detalle_candidatos'][0]['evidencia_concepto'] else
                          'solo importe: revisar concepto' if ids else 'sin candidato individual')
+    # Pair sums are arithmetic leads only; never consume or approve any row.
+    for source, other in [(bank, ledger), (ledger, bank)]:
+        pools = {}
+        for candidate in other:
+            value = Decimal(candidate['importe'])
+            if value:
+                pools.setdefault((candidate['fecha'][:7], value > 0), []).append(candidate)
+        for row in source:
+            target = Decimal(row['importe'])
+            pool = pools.get((row['fecha'][:7], target > 0), []) if target else []
+            row['grupos_candidatos'] = []
+            row['aviso_grupos'] = 'Solo se buscan grupos de dos apuntes del mismo signo y mes; no acredita correspondencia documental.'
+            if len(pool) > 500:
+                row['aviso_grupos'] += ' Búsqueda omitida: más de 500 apuntes candidatos.'
+                continue
+            seen = {}
+            count = 0
+            for candidate in pool:
+                value = Decimal(candidate['importe'])
+                for previous in seen.get(target - value, []):
+                    count += 1
+                    if count <= 20:
+                        row['grupos_candidatos'].append({
+                            'miembros': [{k: item[k] for k in ('id', 'fecha', 'concepto', 'importe')}
+                                         for item in (previous, candidate)],
+                            'suma': str(target),
+                            'estado': 'suma coincidente: pendiente de justificar',
+                        })
+                seen.setdefault(value, []).append(candidate)
+            row['total_grupos_dos'] = count
+            if count > 20:
+                row['aviso_grupos'] += f' Se muestran 20 de {count} combinaciones; búsqueda no resuelta.'
     controls = {}
     for name, rows in [('banco', bank), ('mayor', ledger)]:
         opening, closing = amount(balances[name + '_inicial']), amount(balances[name + '_final'])
