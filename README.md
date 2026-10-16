@@ -78,7 +78,7 @@ entre los saldos de banco y mayor.
 
 Cada registro conserva los campos originales, identificador de origen y número
 de registro CSV (no necesariamente línea física si hay conceptos multilínea).
-Las coincidencias se proponen solo por fecha, concepto e importe con signo;
+Los candidatos individuales se buscan por importe con signo dentro del mismo mes, incluso con fecha distinta. Se muestran ambas fechas, conceptos y el motivo. Una coincidencia solo de importe se etiqueta sin evidencia de concepto. Si hay varios candidatos, duplicados o reclamaciones competidoras, ambos lados se marcan ambiguos;
 no aprueban ninguna partida. Los duplicados se conservan y se señalan. Los
 cobros agrupados permanecen sin pareja y requieren revisión manual. Un registro
 inválido rechaza todo el archivo con un error; no se descartan filas erróneas.
