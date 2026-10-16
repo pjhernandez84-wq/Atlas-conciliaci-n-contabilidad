@@ -53,9 +53,25 @@ class ReconciliationTests(unittest.TestCase):
         result = preview(CSV, ledger, BALANCES)
         self.assertEqual(result['banco'][0]['estado'], 'sin candidato individual')
         self.assertEqual(len(result['mayor']), 2)
+        group = result['banco'][0]['grupos_candidatos'][0]
+        self.assertEqual([m['importe'] for m in group['miembros']], ['40.00', '60.00'])
+        self.assertFalse(result['definitiva'])
 
     def test_original_concept_retained(self):
         text = 'fecha;concepto;importe\n01/01/2026;"Ingreso; cliente";1.234,56\n'
         row = parse_csv(text, 'banco')[0]
         self.assertEqual(row['original']['importe'], '1.234,56')
         self.assertEqual(row['concepto'], 'Ingreso; cliente')
+
+    def test_groups_do_not_mix_signs_or_months(self):
+        for rows in ['01/01/2026;A;130,00\n01/01/2026;B;-30,00\n',
+                     '01/01/2026;A;40,00\n01/02/2026;B;60,00\n']:
+            result = preview(CSV, 'fecha;concepto;importe\n' + rows, BALANCES)
+            self.assertEqual(result['banco'][0]['grupos_candidatos'], [])
+
+    def test_groups_preserve_alternatives_and_warn_on_limit(self):
+        ledger = 'fecha;concepto;importe\n' + ''.join(f'01/01/2026;Cliente {i};50,00\n' for i in range(8))
+        row = preview(CSV, ledger, BALANCES)['banco'][0]
+        self.assertEqual(row['total_grupos_dos'], 28)
+        self.assertEqual(len(row['grupos_candidatos']), 20)
+        self.assertIn('20 de 28', row['aviso_grupos'])
