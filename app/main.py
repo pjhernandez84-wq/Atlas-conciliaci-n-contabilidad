@@ -112,3 +112,71 @@ def companies(user=Depends(current_user)):
         rows = con.execute("""SELECT c.id,c.name,m.role FROM companies c JOIN memberships m ON m.company_id=c.id
             WHERE m.user_id=? ORDER BY c.name""", (user["id"],)).fetchall()
     return [dict(row) for row in rows]
+
+
+# First reconciliation workspace. Uploaded CSV content is never persisted.
+from pathlib import Path
+import csv
+from fastapi.responses import FileResponse
+from pydantic import Field
+from .reconciliation import preview
+
+
+@app.get('/', include_in_schema=False)
+def workspace():
+    return FileResponse(Path(__file__).parent / 'static' / 'index.html')
+
+
+def same_origin(request: Request):
+    origin = request.headers.get('origin')
+    if origin and origin.rstrip('/') != str(request.base_url).rstrip('/'):
+        raise HTTPException(403, 'Origen no permitido')
+    if request.headers.get('sec-fetch-site') == 'cross-site':
+        raise HTTPException(403, 'Origen no permitido')
+
+
+class NewCompany(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+
+
+@app.post('/companies', dependencies=[Depends(same_origin)])
+def create_company(data: NewCompany, user=Depends(current_user)):
+    name = data.name.strip()
+    if not name:
+        raise HTTPException(422, 'Introduce el nombre de la empresa')
+    with db() as con:
+        try:
+            cursor = con.execute('INSERT INTO companies (name) VALUES (?)', (name,))
+        except sqlite3.IntegrityError:
+            raise HTTPException(409, 'Nombre de empresa no disponible')
+        company_id = cursor.lastrowid
+        con.execute("INSERT INTO memberships VALUES (?,?,'admin')", (user['id'], company_id))
+    return {'id': company_id, 'name': name, 'role': 'admin'}
+
+
+class Balances(BaseModel):
+    banco_inicial: str = Field(max_length=40)
+    banco_final: str = Field(max_length=40)
+    mayor_inicial: str = Field(max_length=40)
+    mayor_final: str = Field(max_length=40)
+
+
+class PreviewInput(BaseModel):
+    company_id: int = Field(gt=0)
+    bank_csv: str = Field(max_length=1_000_000)
+    ledger_csv: str = Field(max_length=1_000_000)
+    balances: Balances
+
+
+@app.post('/reconciliation/preview', dependencies=[Depends(same_origin)])
+def reconciliation_preview(data: PreviewInput, user=Depends(current_user)):
+    with db() as con:
+        membership = con.execute('SELECT role FROM memberships WHERE user_id=? AND company_id=?',
+                                 (user['id'], data.company_id)).fetchone()
+    if not membership:
+        raise HTTPException(403, 'Empresa no asignada')
+    try:
+        result = preview(data.bank_csv, data.ledger_csv, data.balances.model_dump())
+    except (ValueError, csv.Error) as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return {'company_id': data.company_id, **result}
