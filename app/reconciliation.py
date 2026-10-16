@@ -73,6 +73,30 @@ def preview(bank_text, ledger_text, balances):
                                 'evidencia_concepto': bool(exact or shared)})
             row['detalle_candidatos'] = details
             row['candidatos'] = [d['id'] for d in details]
+    # Nearby unique amount anchors are context, not proof of correspondence.
+    for source, other in [(bank, ledger), (ledger, bank)]:
+        positions = {r['id']: i for i, r in enumerate(other)}
+        source_counts = Counter((r['fecha'][:7], Decimal(r['importe'])) for r in source)
+        other_counts = Counter((r['fecha'][:7], Decimal(r['importe'])) for r in other)
+        for i, row in enumerate(source):
+            for detail in row['detalle_candidatos']:
+                j = positions[detail['id']]
+                anchors = []
+                for k in range(max(0, i - 3), min(len(source), i + 4)):
+                    neighbor = source[k]
+                    key = (neighbor['fecha'][:7], Decimal(neighbor['importe']))
+                    if k == i or source_counts[key] != 1 or other_counts[key] != 1:
+                        continue
+                    matches = neighbor['candidatos']
+                    if len(matches) == 1 and 0 < abs(positions[matches[0]] - j) <= 3:
+                        anchors.append({'origen': neighbor['id'], 'destino': matches[0],
+                                        'sentido': 'mismo' if (k-i)*(positions[matches[0]]-j) > 0 else 'inverso'})
+                detail['contexto_orden'] = anchors
+                if anchors:
+                    detail['motivo'] += '; orden cercano: ' + ', '.join(
+                        f"{x['origen']} ↔ {x['destino']} ({x['sentido']})" for x in anchors)
+                else:
+                    detail['motivo'] += '; sin apoyo de orden cercano'
     by_id = {r['id']: r for r in bank + ledger}
     for row in bank + ledger:
         ids = row['candidatos']
