@@ -75,3 +75,12 @@ class ReconciliationTests(unittest.TestCase):
         self.assertEqual(row['total_grupos_dos'], 28)
         self.assertEqual(len(row['grupos_candidatos']), 20)
         self.assertIn('20 de 28', row['aviso_grupos'])
+
+    def test_order_context_with_reverse_sequence_preserves_ambiguity(self):
+        bank = 'fecha;concepto;importe\n01/01/2026;A;10,00\n02/01/2026;B;20,00\n03/01/2026;C;30,00\n'
+        ledger = 'fecha;concepto;importe\n31/01/2026;C;30,00\n31/01/2026;B;20,00\n31/01/2026;A;10,00\n31/01/2026;Otro;20,00\n'
+        row = preview(bank, ledger, BALANCES)['banco'][1]
+        self.assertEqual(row['estado'], 'ambigua')
+        self.assertEqual(len(row['candidatos']), 2)
+        self.assertTrue(row['detalle_candidatos'][0]['contexto_orden'])
+        self.assertTrue(all(x['sentido'] == 'inverso' for x in row['detalle_candidatos'][0]['contexto_orden']))
